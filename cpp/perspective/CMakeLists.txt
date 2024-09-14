@@ -20,6 +20,8 @@ cmake_policy(SET CMP0077 NEW)
 # must be set to `NEW` to allow BOOST_ROOT to be defined by env var
 cmake_policy(SET CMP0074 NEW)
 
+cmake_policy(SET CMP0167 NEW)
+
 # Set CMP0094 to NEW - find the first version that matches constraints,
 # instead of the latest version installed.
 cmake_policy(SET CMP0094 NEW)
@@ -27,8 +29,6 @@ cmake_policy(SET CMP0094 NEW)
 if(NOT DEFINED PSP_CMAKE_MODULE_PATH)
     set(PSP_CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../cmake")
 endif()
-
-
 
 
 set(CMAKE_MODULE_PATH "${PSP_CMAKE_MODULE_PATH}/modules" ${CMAKE_MODULE_PATH})
@@ -303,9 +303,9 @@ elseif(PSP_CPP_BUILD OR PSP_PYTHON_BUILD)
                     -fexceptions \
                     -g3 \
                     ")
-                 if (PSP_WASM_EXCEPTIONS)
-                     set(OPT_FLAGS "${OPT_FLAGS} -fwasm-exceptions ")
-                 endif()
+                if (PSP_WASM_EXCEPTIONS)
+                    set(OPT_FLAGS "${OPT_FLAGS} -fwasm-exceptions ")
+                endif()
             endif ()
         else()
             set(OPT_FLAGS " \
@@ -325,20 +325,9 @@ elseif(PSP_CPP_BUILD OR PSP_PYTHON_BUILD)
     if(PSP_PYODIDE)
         set(CMAKE_FIND_ROOT_PATH "${CMAKE_FIND_ROOT_PATH};/usr/local/")
         find_package(Boost REQUIRED)
-    else()
+    elseif(NOT WIN32)
         set(Boost_USE_STATIC_LIBS ON)
         find_package(Boost REQUIRED COMPONENTS system)
-    endif()
-
-    if(NOT Boost_FOUND)
-        message(FATAL_ERROR "${Red}Boost could not be located${ColorReset}")
-    else()
-        psp_build_message("${Cyan}Found Boost: `Boost_INCLUDE_DIRS`: ${Boost_INCLUDE_DIRS}, `Boost_LIBRARY_DIRS` - ${Boost_LIBRARY_DIRS} ${ColorReset}")
-
-        if(WIN32)
-            include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
-            add_definitions(-DBOOST_UUID_FORCE_AUTO_LINK)
-        endif()
     endif()
 
     if(WIN32)
@@ -355,48 +344,8 @@ elseif(PSP_CPP_BUILD OR PSP_PYTHON_BUILD)
     endif()
 
     if(PSP_PYTHON_BUILD)
-        # ########################
-        # PYTHON BINDINGS BUILD #
-        # ########################
         set(CMAKE_POSITION_INDEPENDENT_CODE ON)
         include_directories("${PSP_PYTHON_SRC}/perspective/include")
-
-        if(MANYLINUX)
-            # Manylinux docker images have no shared libraries
-            # The instead use a statically built python.
-            # Cmake's default FindPython can't find the python headers
-            # without also finding (or failing to find) the python libraries
-            # so we use a custom FindPythonHeaders that is the same as the
-            # default, but ignores when the python libraries can't be found.
-            psp_build_message("${Red}Manylinux build has no python shared libraries${ColorReset}")
-            # find_package(Python ${PSP_PYTHON_VERSION} EXACT REQUIRED COMPONENTS Interpreter)
-            # find_package(PythonHeaders ${PSP_PYTHON_VERSION} EXACT REQUIRED)
-        else()
-            # psp_build_message("${Cyan}Use python shared libraries${ColorReset}")
-            # if(PSP_PYODIDE)
-            #     find_package(Python ${PSP_PYTHON_VERSION} EXACT REQUIRED COMPONENTS Interpreter)
-            # else()
-            #     find_package(Python ${PSP_PYTHON_VERSION} EXACT REQUIRED COMPONENTS Interpreter Development.Module)
-            # endif()
-
-            # link_directories(${Python_LIBRARY_DIRS})
-        endif()
-
-        # psp_build_message("${Cyan}Using Python ${Python_VERSION}, \nPython_INCLUDE_DIRS: ${Python_INCLUDE_DIRS}, \nPython_LIBRARIES: ${Python_LIBRARIES}, \nPython_EXECUTABLE: ${Python_EXECUTABLE} ${ColorReset}")
-        # include_directories(${Python_INCLUDE_DIRS})
-
-        # psp_build_dep("pybind11" "${PSP_CMAKE_MODULE_PATH}/Pybind.txt.in")
-
-        # find_package(NumPy REQUIRED)
-
-        # if(NOT PYTHON_NUMPY_FOUND)
-        #     message(FATAL_ERROR "${Red}Numpy could not be located${ColorReset}")
-        # else()
-        #     psp_build_message("${Cyan}Numpy found: ${PYTHON_NUMPY_INCLUDE_DIR}${ColorReset}")
-        #     include_directories(${PYTHON_NUMPY_INCLUDE_DIR})
-        # endif()
-
-        # ####################
     endif()
 endif()
 
@@ -406,9 +355,17 @@ set(RAPIDJSON_BUILD_TESTS OFF CACHE BOOL "Disable rapidjson tests")
 set(CMAKE_C_FLAGS "  \
 -O3 \
 ")
+if (PSP_WASM_EXCEPTIONS)
+set(CMAKE_CXX_FLAGS " -fwasm-exceptions \
+-O3 \
+-g0 \
+")
+else()
 set(CMAKE_CXX_FLAGS " \
 -O3 \
 ")
+
+endif()
 
 if(PSP_PYODIDE)
     set(RELOCATABLE_FLAGS "-sRELOCATABLE=1 -sSIDE_MODULE=2 -sWASM_BIGINT=1")
@@ -451,6 +408,24 @@ psp_build_dep("lz4" "${PSP_CMAKE_MODULE_PATH}/lz4.txt.in")
 
 # Build minimal arrow itself
 psp_build_dep("arrow" "${PSP_CMAKE_MODULE_PATH}/arrow.txt.in")
+
+if(PSP_PYTHON_BUILD AND NOT PSP_PYODIDE)
+    # Boost must be added after arrow to prevent linking bug on Windows.
+    if(WIN32)
+        set(Boost_USE_STATIC_LIBS ON)
+        find_package(Boost REQUIRED COMPONENTS system)
+    endif()
+    if(NOT Boost_FOUND)
+        message(FATAL_ERROR "${Red}Boost could not be located${ColorReset}")
+    else()
+        psp_build_message("${Cyan}Found Boost: `Boost_INCLUDE_DIRS`: ${Boost_INCLUDE_DIRS}, `Boost_LIBRARY_DIRS` - ${Boost_LIBRARY_DIRS} ${ColorReset}")
+        if(WIN32)
+            include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
+            add_definitions(-DBOOST_UUID_FORCE_AUTO_LINK)
+        endif()
+    endif()
+endif()
+
 
 # Build re2 as our regex library
 # this is a workaround for some re2-specific weirdness
@@ -640,7 +615,7 @@ if(PSP_WASM_BUILD AND NOT PSP_PYTHON_BUILD)
     add_library(psp ${WASM_SOURCE_FILES})
     target_compile_definitions(psp PRIVATE PSP_ENABLE_WASM=1)
     set_target_properties(psp PROPERTIES COMPILE_FLAGS "")
-    target_link_libraries(psp PRIVATE arrow re2 protos)
+    target_link_libraries(psp PRIVATE arrow_static re2 protos)
 
     add_executable(perspective_esm src/cpp/binding_api.cpp)
     target_link_libraries(perspective_esm psp protos)
@@ -695,34 +670,19 @@ elseif(PSP_CPP_BUILD OR PSP_PYTHON_BUILD)
             # .dll not importable
             # set_property(TARGET psppy PROPERTY SUFFIX .pyd)
         elseif(MACOS OR NOT MANYLINUX)
-            # target_compile_options(psppy PRIVATE -Wdeprecated-declarations)
             set_property(TARGET psp PROPERTY INSTALL_RPATH ${CMAKE_INSTALL_RPATH} ${module_origin_path})
-            # set_property(TARGET psppy PROPERTY INSTALL_RPATH ${CMAKE_INSTALL_RPATH} ${module_origin_path})
-
             target_compile_options(psp PRIVATE -fvisibility=hidden)
-            # target_compile_options(psppy PRIVATE -fvisibility=hidden)
         elseif(MANYLINUX)
         else()
             target_compile_options(psp PRIVATE -fvisibility=hidden)
-            # target_compile_options(psppy PRIVATE -Wdeprecated-declarations)
         endif()
 
         # Link against minimal arrow static library
-        target_link_libraries(psp PRIVATE arrow re2 protos)
-        # target_link_libraries(psppy psp)
-
-        # The compiled libraries will be put in CMAKE_LIBRARY_OUTPUT_DIRECTORY by default. In the
-        # setup.py file, we designate this to be in the build/lib.<platform> directory. However,
-        # since we want to be able to test perspective in-source, we also copy the libraries into
-        # the source folder. These two commands do that.
-        # add_custom_command(TARGET psp POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:psp> ${PSP_PYTHON_SRC}/table/)
-        # add_custom_command(TARGET psppy POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:psppy> ${PSP_PYTHON_SRC}/table/)
-
-    # #######################
+        target_link_libraries(psp PRIVATE arrow_static re2 protos lz4_static libzstd_static)
     else()
         add_library(psp STATIC ${WASM_SOURCE_FILES})
         target_compile_options(psp PRIVATE -fvisibility=hidden)
-        target_link_libraries(psp PRIVATE arrow re2 protos)
+        target_link_libraries(psp PRIVATE arrow_static re2 protos)
     endif()
 
     if(PSP_CPP_BUILD_STRICT AND NOT WIN32)
